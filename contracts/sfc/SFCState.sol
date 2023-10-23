@@ -3,6 +3,7 @@ pragma solidity ^0.5.0;
 import "./NodeDriver.sol";
 import "../ownership/Ownable.sol";
 import "./ConstantsManager.sol";
+import "./DisputeHandler.sol";
 
 contract SFCState is Initializable, Ownable {
     using SafeMath for uint256;
@@ -108,4 +109,6 @@ contract SFCState is Initializable, Ownable {
     address public voteBookAddress;
 
     address internal sftmFinalizer;
+
+    DisputeHandler internal d;
 }
