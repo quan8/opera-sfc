@@ -1,16 +1,18 @@
 pragma solidity ^0.5.0;
 
-import "../SFCState.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
+import "../DelegationHandler.sol";
+
 library StakingHelper {
     using SafeMath for uint256;
-    
+
     function _getStashedPenaltyForUnlock(
-        mapping(address => mapping(uint256 => SFCState.Penalty[])) storage getPenaltyInfo,
+        mapping(address => mapping(uint256 => DelegationHandler.Penalty[])) storage getPenaltyInfo,
         address delegator,
         uint256 toValidatorID,
         uint256 unlockAmount
     ) internal returns(uint256 stashedPenalty) {
-        SFCState.Penalty[] storage penalties = getPenaltyInfo[delegator][toValidatorID];
+        DelegationHandler.Penalty[] storage penalties = getPenaltyInfo[delegator][toValidatorID];
         uint256 length = penalties.length;
         for(uint256 i=0; i<length; i++) {
             if(penalties[i].amountLockedForPenalty <= unlockAmount) {
@@ -24,13 +26,14 @@ library StakingHelper {
                 penalties[i].amountLockedForPenalty = penalties[i].amountLockedForPenalty.sub(unlockAmount);
             }
         }
+        return stashedPenalty;
     }
 
     function _movePenalties(
-        mapping(address => mapping(uint256 => SFCState.Penalty[])) storage getPenaltyInfo,
+        mapping(address => mapping(uint256 => DelegationHandler.Penalty[])) storage getPenaltyInfo,
         address delegator,
         uint256 toValidatorID,
-        SFCState.Penalty[] memory penalties
+        DelegationHandler.Penalty[] memory penalties
     ) internal {
         uint256 length = penalties.length;
         for(uint256 i=0; i<length; i++) {
@@ -39,13 +42,13 @@ library StakingHelper {
     }
 
     function _splitPenalties(
-        SFCState.Penalty[] memory penalties,
+        DelegationHandler.Penalty[] memory penalties,
         uint256 splitAmount
-    ) internal returns(SFCState.Penalty[] memory results) {
+    ) internal returns(DelegationHandler.Penalty[] memory results) {
         uint256 length = penalties.length;
-        results = new SFCState.Penalty[](length);
+        results = new DelegationHandler.Penalty[](length);
         for(uint256 i=0; i<length; i++) {
-            SFCState.Penalty memory penalty = penalties[i];
+            DelegationHandler.Penalty memory penalty = penalties[i];
             if(penalty.amountLockedForPenalty <= splitAmount) {
                 results[i].amountLockedForPenalty = splitAmount;
                 results[i].penalty = penalty.penalty;

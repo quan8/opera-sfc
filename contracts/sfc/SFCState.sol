@@ -1,69 +1,19 @@
 pragma solidity ^0.5.0;
 
+import "@openzeppelin/contracts/math/SafeMath.sol";
 import "./NodeDriver.sol";
 import "../ownership/Ownable.sol";
 import "./ConstantsManager.sol";
 
 contract SFCState is Initializable, Ownable {
     using SafeMath for uint256;
-    /**
-     * @dev The staking for validation
-     */
-    struct Validator {
-        uint256 status;
-        uint256 deactivatedTime;
-        uint256 deactivatedEpoch;
-
-        uint256 receivedStake;
-        uint256 createdEpoch;
-        uint256 createdTime;
-
-        address auth;
-    }
 
     NodeDriverAuth internal node;
 
-    struct Rewards {
-        uint256 lockupExtraReward;
-        uint256 lockupBaseReward;
-        uint256 unlockedReward;
-    }
-
     uint256 public currentSealedEpoch;
-    mapping(uint256 => Validator) public getValidator;
-    mapping(address => uint256) public getValidatorID;
-    mapping(uint256 => bytes) public getValidatorPubkey;
-
-    uint256 public lastValidatorID;
     uint256 public totalStake;
     uint256 public totalActiveStake;
     uint256 public totalSlashedStake;
-
-    mapping(address => mapping(uint256 => Rewards)) internal _rewardsStash; // addr, validatorID -> Rewards
-
-    mapping(address => mapping(uint256 => uint256)) public stashedRewardsUntilEpoch;
-
-    struct WithdrawalRequest {
-        uint256 epoch;
-        uint256 time;
-
-        uint256 amount;
-    }
-
-    mapping(address => mapping(uint256 => mapping(uint256 => WithdrawalRequest))) public getWithdrawalRequest;
-
-    struct LockedDelegation {
-        uint256 lockedStake;
-        uint256 fromEpoch;
-        uint256 endTime;
-        uint256 duration;
-    }
-
-    mapping(address => mapping(uint256 => uint256)) public getStake;
-
-    mapping(address => mapping(uint256 => LockedDelegation)) public getLockupInfo;
-
-    mapping(address => mapping(uint256 => Rewards)) public getStashedLockupRewards;
 
     struct EpochSnapshot {
         mapping(uint256 => uint256) receivedStake;
@@ -101,6 +51,10 @@ contract SFCState is Initializable, Ownable {
 
     address public treasuryAddress;
 
+    DelegationHandler internal delegationHandler;
+
+    ValidatorHandler internal validatorHandler;
+
     address internal libAddress;
 
     ConstantsManager internal c;
@@ -108,20 +62,4 @@ contract SFCState is Initializable, Ownable {
     address public voteBookAddress;
 
     address internal sftmFinalizer;
-    // New storage variables, no variables in SFCBase and SFCLib
-    // so we are probably safe
-    struct Penalty {
-        uint256 penalty;
-        uint256 penaltyEnd;
-        uint256 amountLockedForPenalty;//locked stake at the moment of the snapshot
-    }
-    struct RedelegationRequest {
-        uint256 time;
-        uint256 prevLockDuration;
-        uint256 prevLockEndTime;
-        uint256 amount;
-        Penalty[] penalties;
-    }
-    mapping(address => mapping(uint256 => Penalty[])) public getPenaltyInfo;
-    mapping(address => mapping(uint256 => RedelegationRequest)) public getRedelegationRequest;
 }

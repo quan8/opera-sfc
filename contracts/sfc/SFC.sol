@@ -76,6 +76,14 @@ contract SFC is SFCBase, Version {
         voteBookAddress = v;
     }
 
+    function delegationHandlerAddress()  external view returns (address) {
+        return address(delegationHandlerAddress);
+    }
+
+    function updateDelegationHandlerAddress(address v) onlyOwner external {
+        delegationHandlerAddress = v;
+    }
+
     /*
     Epoch callbacks
     */

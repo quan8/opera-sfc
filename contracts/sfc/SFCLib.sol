@@ -21,13 +21,10 @@ contract SFCLib is SFCBase {
     event UnlockedStake(address indexed delegator, uint256 indexed validatorID, uint256 amount, uint256 penalty);
     event UpdatedSlashingRefundRatio(uint256 indexed validatorID, uint256 refundRatio);
     event RefundedSlashedLegacyDelegation(address indexed delegator, uint256 indexed validatorID, uint256 amount);
-    event RequestedRedelegation(address indexed delegator, uint256 indexed fromValidatorID, uint256 amount);
-    event Redelegated(address indexed delegator, uint256 indexed fromValidatorID, uint256 indexed toValidatorID, uint256 amount);
 
     /*
     Getters
     */
-
     function getEpochValidatorIDs(uint256 epoch) public view returns (uint256[] memory) {
         return getEpochSnapshot[epoch].validatorIDs;
     }
@@ -54,11 +51,6 @@ contract SFCLib is SFCBase {
 
     function getEpochOfflineBlocks(uint256 epoch, uint256 validatorID) public view returns (uint256) {
         return getEpochSnapshot[epoch].offlineBlocks[validatorID];
-    }
-
-    function rewardsStash(address delegator, uint256 validatorID) public view returns (uint256) {
-        Rewards memory stash = _rewardsStash[delegator][validatorID];
-        return stash.lockupBaseReward.add(stash.lockupExtraReward).add(stash.unlockedReward);
     }
 
     /*
@@ -94,100 +86,21 @@ contract SFCLib is SFCBase {
     function createValidator(bytes calldata pubkey) external payable {
         require(msg.value >= c.minSelfStake(), "insufficient self-stake");
         require(pubkey.length > 0, "empty pubkey");
-        _createValidator(msg.sender, pubkey);
-        _delegate(msg.sender, lastValidatorID, msg.value);
-    }
-
-    function _createValidator(address auth, bytes memory pubkey) internal {
-        uint256 validatorID = ++lastValidatorID;
-        _rawCreateValidator(auth, validatorID, pubkey, OK_STATUS, currentEpoch(), _now(), 0, 0);
-    }
-
-    function _rawCreateValidator(address auth, uint256 validatorID, bytes memory pubkey, uint256 status, uint256 createdEpoch, uint256 createdTime, uint256 deactivatedEpoch, uint256 deactivatedTime) internal {
-        require(getValidatorID[auth] == 0, "validator already exists");
-        getValidatorID[auth] = validatorID;
-        getValidator[validatorID].status = status;
-        getValidator[validatorID].createdEpoch = createdEpoch;
-        getValidator[validatorID].createdTime = createdTime;
-        getValidator[validatorID].deactivatedTime = deactivatedTime;
-        getValidator[validatorID].deactivatedEpoch = deactivatedEpoch;
-        getValidator[validatorID].auth = auth;
-        getValidatorPubkey[validatorID] = pubkey;
-
-        emit CreatedValidator(validatorID, auth, createdEpoch, createdTime);
-        if (deactivatedEpoch != 0) {
-            emit DeactivatedValidator(validatorID, deactivatedEpoch, deactivatedTime);
-        }
-        if (status != 0) {
-            emit ChangedValidatorStatus(validatorID, status);
-        }
-    }
-
-    function getSelfStake(uint256 validatorID) public view returns (uint256) {
-        return getStake[getValidator[validatorID].auth][validatorID];
-    }
-
-    function _checkDelegatedStakeLimit(uint256 validatorID) internal view returns (bool) {
-        return getValidator[validatorID].receivedStake <= getSelfStake(validatorID).mul(c.maxDelegatedRatio()).div(Decimal.unit());
+        validatorHandler._createValidator(msg.sender, pubkey);
+        delegationHandler._delegate(msg.sender, lastValidatorID, msg.value);
     }
 
     function delegate(uint256 toValidatorID) external payable {
         blacklist();
-        _delegate(msg.sender, toValidatorID, msg.value);
+        delegationHandler._delegate(msg.sender, toValidatorID, msg.value);
     }
 
-    function _delegate(address delegator, uint256 toValidatorID, uint256 amount) internal {
-        require(_validatorExists(toValidatorID), "validator doesn't exist");
-        require(getValidator[toValidatorID].status == OK_STATUS, "validator isn't active");
-        _rawDelegate(delegator, toValidatorID, amount, true);
-        require(_checkDelegatedStakeLimit(toValidatorID), "validator's delegations limit is exceeded");
-    }
-
-    function _rawDelegate(address delegator, uint256 toValidatorID, uint256 amount, bool strict) internal {
-        require(amount > 0, "zero amount");
-
-        _stashRewards(delegator, toValidatorID);
-
-        getStake[delegator][toValidatorID] = getStake[delegator][toValidatorID].add(amount);
-        uint256 origStake = getValidator[toValidatorID].receivedStake;
-        getValidator[toValidatorID].receivedStake = origStake.add(amount);
-        totalStake = totalStake.add(amount);
-        if (getValidator[toValidatorID].status == OK_STATUS) {
-            totalActiveStake = totalActiveStake.add(amount);
-        }
-
-        _syncValidator(toValidatorID, origStake == 0);
-
-        emit Delegated(delegator, toValidatorID, amount);
-
-        _recountVotes(delegator, getValidator[toValidatorID].auth, strict);
-    }
 
     function recountVotes(address delegator, address validatorAuth, bool strict, uint256 gas) external {
         (bool success,) = voteBookAddress.call.gas(gas)(abi.encodeWithSignature("recountVotes(address,address)", delegator, validatorAuth));
         require(success || !strict, "gov votes recounting failed");
     }
 
-    function _rawUndelegate(address delegator, uint256 toValidatorID, uint256 amount, bool strict) internal {
-        getStake[delegator][toValidatorID] = getStake[delegator][toValidatorID].sub(amount);
-        getValidator[toValidatorID].receivedStake = getValidator[toValidatorID].receivedStake.sub(amount);
-        totalStake = totalStake.sub(amount);
-        if (getValidator[toValidatorID].status == OK_STATUS) {
-            totalActiveStake = totalActiveStake.sub(amount);
-        }
-
-        uint256 selfStakeAfterwards = getSelfStake(toValidatorID);
-        if (selfStakeAfterwards != 0) {
-            if (getValidator[toValidatorID].status == OK_STATUS) {
-                require(selfStakeAfterwards >= c.minSelfStake(), "insufficient self-stake");
-                require(_checkDelegatedStakeLimit(toValidatorID), "validator's delegations limit is exceeded");
-            }
-        } else {
-            _setValidatorDeactivated(toValidatorID, WITHDRAWN_BIT);
-        }
-
-        _recountVotes(delegator, getValidator[toValidatorID].auth, strict);
-    }
 
     function undelegate(uint256 toValidatorID, uint256 wrID, uint256 amount) public {
         address delegator = msg.sender;
@@ -209,103 +122,6 @@ contract SFCLib is SFCBase {
         _syncValidator(toValidatorID, false);
 
         emit Undelegated(delegator, toValidatorID, wrID, amount);
-    }
-
-    // At the request phase we undelegate and unlock (no penalties applied) tokens from the fromValidator
-    // we do not specify the toValidator because of the delay, if toValidator will cease to exist
-    // during this period, user's funds will be stuck, for this reason we allow user to choose 
-    // the toValidator after the redelegation period
-    function requestRedelegation(uint256 fromValidatorID, uint256 amount) external {
-        address delegator = msg.sender;
-        RedelegationRequest storage rdRequest = getRedelegationRequest[delegator][fromValidatorID];
-        // fail early
-        require(rdRequest.time == 0, "has an active request");
-
-        LockedDelegation storage fromLock = getLockupInfo[delegator][fromValidatorID];
-        // we allow only locked tokens redelegation, so user won't suffer penalties when undelegating
-        // and unlocking with standard functions, if the user wants to redelegate his unlocked stake 
-        // he is free to use undelegate() function
-        require(amount > 0, "zero amount");
-        require(amount <= getLockedStake(delegator, fromValidatorID), "not enough locked stake");
-        require(_checkAllowedToWithdraw(delegator, fromValidatorID), "outstanding sFTM balance");
-
-        _stashRewards(delegator, fromValidatorID);
-        _rawUndelegate(delegator, fromValidatorID, amount, true); 
-        
-        // stash accumulated penalties and update stashed lock rewards
-        // if the user has an empty penalties array (never relocked)
-        refreshPenalties(delegator, fromValidatorID);
-        Penalty[] storage penalties = getPenaltyInfo[delegator][fromValidatorID];
-        uint256 penalty = _popDelegationUnlockPenalty(delegator, fromValidatorID, fromLock.lockedStake, fromLock.lockedStake);
-        penalties.push(Penalty(penalty, fromLock.endTime, fromLock.lockedStake));
-        // save prev lock info and set a timestamp
-        // later we transfer lock info from val#1 to val#2, 
-        // expect that val#2 already has locks from the user
-        rdRequest.time = _now() + c.redelegationPeriodTime();
-        rdRequest.prevLockDuration = fromLock.duration;
-        rdRequest.prevLockEndTime = fromLock.endTime;
-        rdRequest.amount = amount;
-        rdRequest.penalties = penalties;
-        // update fromValidator lockup info
-        if(fromLock.lockedStake <= amount) {
-            delete getPenaltyInfo[delegator][fromValidatorID];
-            delete getLockupInfo[delegator][fromValidatorID];
-        } else {
-            uint256 fromLockedStake = fromLock.lockedStake;
-            // reduce remaining penalty and lock according to the redelegation amount
-            getPenaltyInfo._getStashedPenaltyForUnlock(delegator, fromValidatorID, amount);
-            fromLock.lockedStake = fromLockedStake.sub(amount);
-        }
-        emit UnlockedStake(delegator, fromValidatorID, amount, 0);
-        emit RequestedRedelegation(delegator, fromValidatorID, amount);
-    }
-    
-    // execute the redelegation, if the toValidator do not exist or has reached his limit,
-    // the user will have to specify another one, we assume that there are at least one active validator
-    // that will accept the redelegation (e.g. the validator we redelegated from) so the user's tokens  won't get stuck
-    function executeRedelegation(uint256 fromValidatorID, uint256 toValidatorID) external {
-        address delegator = msg.sender;
-        RedelegationRequest memory rdRequest = getRedelegationRequest[delegator][fromValidatorID];
-
-        require(rdRequest.time != 0, "redelegation request not found");
-        require(rdRequest.time <= _now(), "not enough time passed");
-
-        _stashRewards(delegator, fromValidatorID);
-        _delegate(delegator, toValidatorID, rdRequest.amount);
-
-        LockedDelegation storage toLock = getLockupInfo[delegator][toValidatorID];
-        // can't redelegate to valiator where user has a lock that will end earlier than his previous one
-        // if delegator has previous lock for this validator, just increase the amount
-        if(toLock.lockedStake != 0) {
-            uint256 toLockedStake = toLock.lockedStake;
-            toLock.lockedStake = toLockedStake.add(rdRequest.amount);
-
-            emit LockedUpStake(delegator, toValidatorID, toLock.duration, rdRequest.amount);
-        } else {
-        // create a new locka with previous params
-            address validatorAddr = getValidator[toValidatorID].auth;
-            if (delegator != validatorAddr) {
-                require(
-                    getLockupInfo[validatorAddr][toValidatorID].endTime >= rdRequest.prevLockEndTime,
-                    "validator lockup period will end earlier"
-                );
-            }
-
-            //_stashRewards(delegator, toValidatorID);
-            toLock.lockedStake = toLock.lockedStake.add(rdRequest.amount);
-            toLock.fromEpoch = currentEpoch(); 
-            toLock.endTime = rdRequest.prevLockEndTime;
-            toLock.duration = rdRequest.prevLockDuration;
-
-            emit LockedUpStake(delegator, toValidatorID, rdRequest.prevLockDuration, rdRequest.amount);
-        }
-        // move penalties
-        refreshPenalties(delegator, toValidatorID);
-        Penalty[] memory result = StakingHelper._splitPenalties(rdRequest.penalties, rdRequest.amount);
-        getPenaltyInfo._movePenalties(delegator, toValidatorID, result);
-       
-        delete getRedelegationRequest[delegator][fromValidatorID];
-        emit Redelegated(delegator, fromValidatorID, toValidatorID, rdRequest.amount);
     }
 
     // liquidateSFTM is used for finalization of last fMint positions with outstanding sFTM balances
@@ -343,10 +159,6 @@ contract SFCLib is SFCBase {
         sftmFinalizer = v;
     }
 
-    function isSlashed(uint256 validatorID) view public returns (bool) {
-        return getValidator[validatorID].status & CHEATER_MASK != 0;
-    }
-
     function getSlashingPenalty(uint256 amount, bool isCheater, uint256 refundRatio) internal pure returns (uint256 penalty) {
         if (!isCheater || refundRatio >= Decimal.unit()) {
             return 0;
@@ -357,36 +169,6 @@ contract SFCLib is SFCBase {
             return amount;
         }
         return penalty;
-    }
-
-    function _withdraw(address payable delegator, uint256 toValidatorID, uint256 wrID, address payable receiver) private {
-        WithdrawalRequest memory request = getWithdrawalRequest[delegator][toValidatorID][wrID];
-        require(request.epoch != 0, "request doesn't exist");
-        require(_checkAllowedToWithdraw(delegator, toValidatorID), "outstanding sFTM balance");
-
-        uint256 requestTime = request.time;
-        uint256 requestEpoch = request.epoch;
-        if (getValidator[toValidatorID].deactivatedTime != 0 && getValidator[toValidatorID].deactivatedTime < requestTime) {
-            requestTime = getValidator[toValidatorID].deactivatedTime;
-            requestEpoch = getValidator[toValidatorID].deactivatedEpoch;
-        }
-
-        require(_now() >= requestTime + c.withdrawalPeriodTime(), "not enough time passed");
-        require(currentEpoch() >= requestEpoch + c.withdrawalPeriodEpochs(), "not enough epochs passed");
-
-        uint256 amount = getWithdrawalRequest[delegator][toValidatorID][wrID].amount;
-        bool isCheater = isSlashed(toValidatorID);
-        uint256 penalty = getSlashingPenalty(amount, isCheater, slashingRefundRatio[toValidatorID]);
-        delete getWithdrawalRequest[delegator][toValidatorID][wrID];
-
-        totalSlashedStake += penalty;
-        require(amount > penalty, "stake is fully slashed");
-        // It's important that we transfer after erasing (protection against Re-Entrancy)
-        (bool sent,) = receiver.call.value(amount.sub(penalty))("");
-        require(sent, "Failed to send FTM");
-        _burnFTM(penalty);
-
-        emit Withdrawn(delegator, toValidatorID, wrID, amount);
     }
 
     function withdraw(uint256 toValidatorID, uint256 wrID) public {
@@ -416,15 +198,6 @@ contract SFCLib is SFCBase {
         _recountVotes(validatorAddr, validatorAddr, false);
     }
 
-    function _highestPayableEpoch(uint256 validatorID) internal view returns (uint256) {
-        if (getValidator[validatorID].deactivatedEpoch != 0) {
-            if (currentSealedEpoch < getValidator[validatorID].deactivatedEpoch) {
-                return currentSealedEpoch;
-            }
-            return getValidator[validatorID].deactivatedEpoch;
-        }
-        return currentSealedEpoch;
-    }
 
     // find highest epoch such that _isLockedUpAtEpoch returns true (using binary search)
     function _highestLockupEpoch(address delegator, uint256 validatorID) internal view returns (uint256) {
@@ -492,7 +265,7 @@ contract SFCLib is SFCBase {
 
     function pendingRewards(address delegator, uint256 toValidatorID) external view returns (uint256) {
         Rewards memory reward = _newRewards(delegator, toValidatorID);
-        reward = sumRewards(_rewardsStash[delegator][toValidatorID], reward); 
+        reward = sumRewards(_rewardsStash[delegator][toValidatorID], reward);
         return reward.unlockedReward.add(reward.lockupBaseReward).add(reward.lockupExtraReward);
     }
 
@@ -557,47 +330,12 @@ contract SFCLib is SFCBase {
         }
     }
 
-    function _isLockedUpAtEpoch(address delegator, uint256 toValidatorID, uint256 epoch) internal view returns (bool) {
-        return getLockupInfo[delegator][toValidatorID].fromEpoch <= epoch && getEpochSnapshot[epoch].endTime <= getLockupInfo[delegator][toValidatorID].endTime;
-    }
 
     function _checkAllowedToWithdraw(address delegator, uint256 toValidatorID) internal view returns (bool) {
         if (stakeTokenizerAddress == address(0)) {
             return true;
         }
         return StakeTokenizer(stakeTokenizerAddress).allowedToWithdrawStake(delegator, toValidatorID);
-    }
-
-    function getUnlockedStake(address delegator, uint256 toValidatorID) public view returns (uint256) {
-        if (!isLockedUp(delegator, toValidatorID)) {
-            return getStake[delegator][toValidatorID];
-        }
-        return getStake[delegator][toValidatorID].sub(getLockupInfo[delegator][toValidatorID].lockedStake);
-    }
-
-    function _lockStake(address delegator, uint256 toValidatorID, uint256 lockupDuration, uint256 amount) internal {
-        require(amount <= getUnlockedStake(delegator, toValidatorID), "not enough stake");
-        require(getValidator[toValidatorID].status == OK_STATUS, "validator isn't active");
-
-        require(lockupDuration >= c.minLockupDuration() && lockupDuration <= c.maxLockupDuration(), "incorrect duration");
-        uint256 endTime = _now().add(lockupDuration);
-        address validatorAddr = getValidator[toValidatorID].auth;
-        if (delegator != validatorAddr) {
-            require(getLockupInfo[validatorAddr][toValidatorID].endTime >= endTime, "validator lockup period will end earlier");
-        }
-
-        _stashRewards(delegator, toValidatorID);
-
-        // check lockup duration after _stashRewards, which has erased previous lockup if it has unlocked already
-        LockedDelegation storage ld = getLockupInfo[delegator][toValidatorID];
-        require(lockupDuration >= ld.duration, "lockup duration cannot decrease");
-
-        ld.lockedStake = ld.lockedStake.add(amount);
-        ld.fromEpoch = currentEpoch();
-        ld.endTime = endTime;
-        ld.duration = lockupDuration;
-
-        emit LockedUpStake(delegator, toValidatorID, lockupDuration, amount);
     }
 
     function lockStake(uint256 toValidatorID, uint256 lockupDuration, uint256 amount) external {
@@ -614,7 +352,7 @@ contract SFCLib is SFCBase {
         LockedDelegation memory ld = getLockupInfo[delegator][toValidatorID];
         Penalty[] storage penalties = getPenaltyInfo[delegator][toValidatorID];
         require(penalties.length < c.maxRelockCount(), "relock count exceeded");
-        
+
         _stashRewards(delegator, toValidatorID);
         uint256 penalty = _popDelegationUnlockPenalty(delegator, toValidatorID, ld.lockedStake, ld.lockedStake);
 
@@ -687,7 +425,7 @@ contract SFCLib is SFCBase {
     }
 
     function updateSlashingRefundRatio(uint256 validatorID, uint256 refundRatio) onlyOwner external {
-        require(isSlashed(validatorID), "validator isn't slashed");
+        require(validatorHandler.isSlashed(validatorID), "validator isn't slashed");
         require(refundRatio <= Decimal.unit(), "must be less than or equal to 1.0");
         slashingRefundRatio[validatorID] = refundRatio;
         emit UpdatedSlashingRefundRatio(validatorID, refundRatio);
