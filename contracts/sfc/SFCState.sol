@@ -61,6 +61,9 @@ contract SFCState is Initializable, Ownable {
 
     mapping(address => mapping(uint256 => uint256)) public getStake;
 
+    mapping(address => address) public getAuthoriser; // mapping from delegator -> second authorizer
+    mapping(address => mapping(address => uint256)) public getAuthorisations; // authorizer -> (delegator, num-of-permits)
+
     mapping(address => mapping(uint256 => LockedDelegation)) public getLockupInfo;
 
     mapping(address => mapping(uint256 => Rewards)) public getStashedLockupRewards;

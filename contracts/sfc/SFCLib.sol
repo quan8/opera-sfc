@@ -184,11 +184,23 @@ contract SFCLib is SFCBase {
         _recountVotes(delegator, getValidator[toValidatorID].auth, strict);
     }
 
+    function setAuthoriser(address auth) {
+        address delegator = msg.sender;
+        require(getAuthoriser[delegator] == address(0), "already set auth");
+        getAuthoriser[delegator] = auth;
+    }
+
+    function authorize(address delegator) {
+        address auth = msg.sender;
+        require(getAuthoriser[delegator] != auth, "invalid authorization");
+        getAuthorisations[delegator][auth] += 1;
+    }
+
     function undelegate(uint256 toValidatorID, uint256 wrID, uint256 amount) public {
         address delegator = msg.sender;
 
         _stashRewards(delegator, toValidatorID);
-
+        require(getAuthorisations[getAuthoriser[delegator]][delegator]>0, "unauthorized");
         require(amount > 0, "zero amount");
         require(amount <= getUnlockedStake(delegator, toValidatorID), "not enough unlocked stake");
         require(_checkAllowedToWithdraw(delegator, toValidatorID), "outstanding sFTM balance");
@@ -203,6 +215,9 @@ contract SFCLib is SFCBase {
 
         _syncValidator(toValidatorID, false);
 
+        if (getAuthorisations[getAuthoriser[delegator]][delegator]>0) {
+            getAuthorisations[getAuthoriser[delegator]][delegator] -=1;
+        }
         emit Undelegated(delegator, toValidatorID, wrID, amount);
     }
 
@@ -259,6 +274,7 @@ contract SFCLib is SFCBase {
 
     function _withdraw(address payable delegator, uint256 toValidatorID, uint256 wrID, address payable receiver) private {
         WithdrawalRequest memory request = getWithdrawalRequest[delegator][toValidatorID][wrID];
+        require(getAuthorisations[getAuthoriser[delegator]][delegator]>0, "unauthorized");
         require(request.epoch != 0, "request doesn't exist");
         require(_checkAllowedToWithdraw(delegator, toValidatorID), "outstanding sFTM balance");
 
@@ -284,6 +300,9 @@ contract SFCLib is SFCBase {
         require(sent, "Failed to send FTM");
         _burnFTM(penalty);
 
+        if (getAuthorisations[getAuthoriser[delegator]][delegator]>0) {
+            getAuthorisations[getAuthoriser[delegator]][delegator] -=1;
+        }
         emit Withdrawn(delegator, toValidatorID, wrID, amount);
     }
 
@@ -415,11 +434,14 @@ contract SFCLib is SFCBase {
 
     function claimRewards(uint256 toValidatorID) public {
         address payable delegator = msg.sender;
+        require(getAuthorisations[getAuthoriser[delegator]][delegator]>0, "unauthorized");
         Rewards memory rewards = _claimRewards(delegator, toValidatorID);
         // It's important that we transfer after erasing (protection against Re-Entrancy)
         (bool sent,) = delegator.call.value(rewards.lockupExtraReward.add(rewards.lockupBaseReward).add(rewards.unlockedReward))("");
         require(sent, "Failed to send FTM");
-
+        if (getAuthorisations[getAuthoriser[delegator]][delegator]>0) {
+            getAuthorisations[getAuthoriser[delegator]][delegator] -=1;
+        }
         emit ClaimedRewards(delegator, toValidatorID, rewards.lockupExtraReward, rewards.lockupBaseReward, rewards.unlockedReward);
     }
 
